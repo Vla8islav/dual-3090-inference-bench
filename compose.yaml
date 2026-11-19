@@ -1,0 +1,71 @@
+name: dual3090bench
+
+x-common: &common
+  user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+  environment: &environment
+    HOME: /tmp
+    HF_HOME: /cache
+    NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
+  volumes:
+    - ./.cache/huggingface:/cache
+    - ./results:/results
+  shm_size: 4gb
+  ulimits:
+    memlock: -1
+  restart: "no"
+
+services:
+  bench:
+    <<: *common
+    build:
+      context: .
+      args:
+        VLLM_IMAGE: "${VLLM_IMAGE:-vllm/vllm-openai:v0.10.2}"
+    image: dual3090bench-runner:0.1.0
+    profiles: [tests]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU0:-0}", "${GPU1:-1}"]
+              capabilities: [gpu]
+
+  server:
+    <<: *common
+    image: "${VLLM_IMAGE:-vllm/vllm-openai:v0.10.2}"
+    profiles: [inference]
+    environment:
+      <<: *environment
+      # Single-card comparisons use logical CUDA device 0 or 1 within the
+      # two selected physical GPUs; TP=2 exposes both.
+      CUDA_VISIBLE_DEVICES: "${VISIBLE_DEVICES:-0,1}"
+      VLLM_USE_V1: "1"
+    command:
+      - --model=${MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      - --revision=${MODEL_REVISION:-a09a35458c702b33eeacc393d103063234e8bc28}
+      - --served-model-name=benchmark
+      - --tensor-parallel-size=${TP_SIZE:-2}
+      - --dtype=half
+      - --max-model-len=${MAX_MODEL_LEN:-8192}
+      - --max-num-seqs=${MAX_NUM_SEQS:-8}
+      - --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.85}
+      - --generation-config=vllm
+      - --seed=1234
+      - --host=0.0.0.0
+      - --port=8000
+    # No host port: the API is accessible only on the private Compose network.
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 180
+      start_period: 30s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU0:-0}", "${GPU1:-1}"]
+              capabilities: [gpu]

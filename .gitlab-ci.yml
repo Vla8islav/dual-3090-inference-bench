@@ -1,0 +1,15 @@
+stages: [test]
+
+offline-tests:
+  stage: test
+  image: python:3.11.13-slim-bookworm
+  script:
+    - python3 -m unittest discover -s tests -v
+    - python3 -m py_compile bench.py report.py
+    - bash -n run.sh
+
+compose-validation:
+  stage: test
+  image: docker:27.5.1-cli
+  script:
+    - docker compose --profile tests --profile inference config --quiet
